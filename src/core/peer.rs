@@ -1,21 +1,19 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::time::Instant;
 
 pub struct Peer {
     pub ip: IpAddr,
     pub port: u16,
     pub peer_id: [u8; 20],
-    pub am_choking: bool,
-    pub am_interested: bool,
-    pub peer_choking: bool,
-    pub peer_interested: bool,
+    pub am_choking: bool,      //is we choking
+    pub am_interested: bool,   // is we want
+    pub peer_choking: bool,    // is they choking
+    pub peer_interested: bool, // is they want
     pub bitfield: Vec<u8>,
     pub downloading: bool,
     pub uploading: bool,
     pub available_pieces: Vec<usize>,
     pub outstanding_requests: HashMap<u32, u32>,
-    pub last_active: Instant,
 }
 
 impl Peer {
@@ -118,16 +116,6 @@ impl Peer {
     pub fn get_outstanding_requests(&self) -> &HashMap<u32, u32> {
         //Todo
         &self.outstanding_requests
-    }
-
-    pub fn update_last_active(&mut self) {
-        //Todo
-        self.last_active = Instant::now();
-    }
-
-    pub fn get_last_active(&self) -> Instant {
-        //Todo
-        self.last_active
     }
 
     pub fn set_downloading(&mut self, downloading: bool) {
