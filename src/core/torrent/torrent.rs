@@ -2,6 +2,8 @@ use crate::core::torrent::torrent_error::{BDecoderError, BStreamingError, ReadTo
 
 use bencode::from_buffer;
 use rustc_serialize::{Decodable, Decoder};
+use std::fs;
+use std::path::Path;
 
 #[derive(Debug)]
 pub struct Torrent {
@@ -137,5 +139,13 @@ impl Torrent {
         let bencode = from_buffer(bytes).map_err(BStreamingError::from)?;
         let mut decoder = bencode::Decoder::new(&bencode);
         Ok(Decodable::decode(&mut decoder).map_err(BDecoderError::from)?)
+    }
+
+    //Create Torrent from file
+    //input: file path
+    //output: Torrent struct or error if any
+    pub fn from_file(file: &Path) -> Result<Self, ReadTorrentError> {
+        let contents = fs::read_to_string(file).unwrap();
+        Self::from_bytes(&contents.into_bytes())
     }
 }
