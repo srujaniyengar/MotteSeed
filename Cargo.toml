@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 bencode = "0.1"
+rustc-serialize = "0.3"
 thiserror = "2"
