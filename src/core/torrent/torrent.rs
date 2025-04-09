@@ -172,7 +172,7 @@ impl Torrent {
     //input: file path
     //output: Torrent struct or error if any
     pub fn from_file(file: &Path) -> Result<(Self, [u8; 20]), ReadTorrentError> {
-        let contents = fs::read_to_string(file).unwrap();
-        Self::from_bytes(&contents.into_bytes())
+        let content = fs::read(file).map_err(|e| ReadTorrentError::IOError(e))?;
+        Self::from_bytes(&content)
     }
 }
