@@ -1,7 +1,9 @@
 use crate::core::torrent::torrent_error::{BDecoderError, BStreamingError, ReadTorrentError};
 
-use bencode::from_buffer;
+use bencode::util::ByteString;
+use bencode::{Bencode, from_buffer};
 use rustc_serialize::{Decodable, Decoder};
+use sha1::{Digest, Sha1};
 use std::fs;
 use std::path::Path;
 
@@ -135,16 +137,41 @@ impl Torrent {
     //create Torrent from bytes
     //input: bytes
     //output: Torrent struct or error if any
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ReadTorrentError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<(Self, [u8; 20]), ReadTorrentError> {
+        //convert bytes to Torrent struct
         let bencode = from_buffer(bytes).map_err(BStreamingError::from)?;
         let mut decoder = bencode::Decoder::new(&bencode);
-        Ok(Decodable::decode(&mut decoder).map_err(BDecoderError::from)?)
+        let torrent = Decodable::decode(&mut decoder).map_err(BDecoderError::from)?;
+
+        //get info bencoded value
+        let info_bytes = if let Bencode::Dict(torrent) = bencode {
+            if let Some(info) = torrent.get(&ByteString::from_str("info")) {
+                Ok(info.to_bytes()?)
+            } else {
+                //branch will not be reached
+                Err(ReadTorrentError::LogicError(
+                    "Missing 'info' key after dictionary check".to_string(),
+                ))
+            }
+        } else {
+            //branch will not be reached
+            Err(ReadTorrentError::LogicError(
+                "Not a valid Torrent format".to_string(),
+            ))
+        }?;
+
+        //calculate sha1 of info
+        let mut hasher = Sha1::new();
+        hasher.update(&info_bytes);
+        let info_hash = hasher.finalize();
+
+        Ok((torrent, info_hash.into()))
     }
 
     //Create Torrent from file
     //input: file path
     //output: Torrent struct or error if any
-    pub fn from_file(file: &Path) -> Result<Self, ReadTorrentError> {
+    pub fn from_file(file: &Path) -> Result<(Self, [u8; 20]), ReadTorrentError> {
         let contents = fs::read_to_string(file).unwrap();
         Self::from_bytes(&contents.into_bytes())
     }
