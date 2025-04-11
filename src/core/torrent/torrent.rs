@@ -131,7 +131,7 @@ impl<'a> BencodeDecodable<'a> for FileEntry<'a> {
 
 impl<'a> Info<'a> {
     //get SHA1 of a index from raw_pieces
-    fn piece_hash(&self, index: usize) -> Option<&[u8; 20]> {
+    pub fn piece_hash(&self, index: usize) -> Option<&[u8; 20]> {
         //compute start and end
         let start = index * 20;
         let end = start + 20;
