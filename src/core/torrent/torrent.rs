@@ -215,6 +215,18 @@ impl<'a> BencodeDecodable<'a> for FileEntry<'a> {
     }
 }
 
+impl<'a> Info<'a> {
+    fn piece_hash(&self, index: usize) -> Option<&[u8; 20]> {
+        let start = index * 20;
+        let end = start + 20;
+        if end <= self.raw_pieces.len() {
+            self.raw_pieces[start..end].try_into().ok()
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TorrentFile {
     _data: Rc<Vec<u8>>,            //store data to ensure it stays alive
