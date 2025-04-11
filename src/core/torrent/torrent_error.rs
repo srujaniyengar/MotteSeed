@@ -8,6 +8,14 @@ pub enum ReadTorrentError {
     #[error("Streaming error: {0}")]
     StreamingError(#[from] BStreamingError),
 
+    //key not found error
+    #[error("Key not found: {0}")]
+    KeyNotFound(String),
+
+    //wrong tyep error
+    #[error("Found wrong type: {0}")]
+    WrongType(String),
+
     //logical error with a display message
     #[error("Logical error: {0}")]
     LogicError(String),
