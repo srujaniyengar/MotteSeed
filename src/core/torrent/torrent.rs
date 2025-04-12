@@ -43,9 +43,8 @@ impl<'a> BencodeDecodable<'a> for Torrent<'a> {
 
 #[derive(Debug)]
 pub struct Info<'a> {
-    pub name: Cow<'a, str>, //torrent name/file name
-    pub piece_length: u64,  //size of each piece in bytes
-    // pub pieces: Vec<[u8; 20]>,     //list of SHA-1 piece hashes
+    pub name: Cow<'a, str>,            //torrent name/file name
+    pub piece_length: u64,             //size of each piece in bytes
     pub raw_pieces: &'a [u8], //raw bytes representing the concatenated SHA-1 hashes of all pieces
     pub file_details: FileDetails<'a>, //single/multi file torrent
 }
