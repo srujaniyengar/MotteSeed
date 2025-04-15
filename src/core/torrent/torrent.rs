@@ -1,12 +1,19 @@
-use crate::core::torrent::bencode_decodable::BencodeDecodable;
 use crate::core::torrent::torrent_error::{BStreamingError, ReadTorrentError};
+use crate::util::bencode::bencode_decodable::BencodeDecodable;
+use crate::util::bencode::bencode_decodable_error::BencodeDecodableError;
 
+use bencode::util::ByteString;
 use bencode::{Bencode, from_buffer};
+use once_cell::sync::Lazy;
 use sha1::{Digest, Sha1};
 use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 use std::rc::Rc;
+
+//define cached keys
+static LENGTH_KEY: Lazy<ByteString> = Lazy::new(|| ByteString::from_str("length"));
+static PATH_KEY: Lazy<ByteString> = Lazy::new(|| ByteString::from_str("path"));
 
 #[derive(Debug)]
 pub struct Torrent<'a> {
@@ -16,7 +23,7 @@ pub struct Torrent<'a> {
 }
 
 impl<'a> BencodeDecodable<'a> for Torrent<'a> {
-    fn decode(b: &'a Bencode) -> Result<Self, ReadTorrentError> {
+    fn decode(b: &'a Bencode) -> Result<Self, BencodeDecodableError> {
         //get dict from bencode
         let dict = Self::get_struct(b)?;
         //get announce value
@@ -27,7 +34,9 @@ impl<'a> BencodeDecodable<'a> for Torrent<'a> {
         let info = Info::decode(info_dict)?;
 
         //get raw info bytes to calculate SHA1
-        let info_bytes = info_dict.to_bytes()?;
+        let info_bytes = info_dict
+            .to_bytes()
+            .map_err(|e| BencodeDecodableError::Other(e.into()))?;
         //calculate sha1 of info
         let mut hasher = Sha1::new();
         hasher.update(&info_bytes);
@@ -50,7 +59,7 @@ pub struct Info<'a> {
 }
 
 impl<'a> BencodeDecodable<'a> for Info<'a> {
-    fn decode(b: &'a Bencode) -> Result<Self, ReadTorrentError> {
+    fn decode(b: &'a Bencode) -> Result<Self, BencodeDecodableError> {
         //get dict from bencode
         let dict = Self::get_struct(b)?;
         //get name value
@@ -62,7 +71,7 @@ impl<'a> BencodeDecodable<'a> for Info<'a> {
 
         //validate that pieces data contains complete SHA-1 hashes (each hash is exactly 20 bytes)
         if raw_pieces.len() % 20 != 0 {
-            return Err(ReadTorrentError::LogicError("Invalid pieces length".into()));
+            return Err(BencodeDecodableError::Other("Invalid pieces length".into()));
         }
 
         //get file details
@@ -110,13 +119,13 @@ pub struct FileEntry<'a> {
 }
 
 impl<'a> BencodeDecodable<'a> for FileEntry<'a> {
-    fn decode(b: &'a Bencode) -> Result<Self, ReadTorrentError> {
+    fn decode(b: &'a Bencode) -> Result<Self, BencodeDecodableError> {
         //get dict from bencode
         let dict = Self::get_struct(b)?;
         //get length value
-        let length = Self::get_u64(Self::get_length(dict)?)?;
+        let length = Self::get_u64(Self::get_struct_value_from_bytestring(&LENGTH_KEY, dict)?)?;
         //get path list value
-        let path_list = Self::get_list(Self::get_path(dict)?)?;
+        let path_list = Self::get_list(Self::get_struct_value_from_bytestring(&PATH_KEY, dict)?)?;
 
         let mut path = Vec::with_capacity(path_list.len());
         //file path from path list

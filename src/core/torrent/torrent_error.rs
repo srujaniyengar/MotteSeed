@@ -1,3 +1,5 @@
+use crate::util::bencode::bencode_decodable_error::BencodeDecodableError;
+
 use bencode::streaming::Error as BencStreamingError;
 use thiserror::Error;
 
@@ -10,15 +12,7 @@ pub enum ReadTorrentError {
 
     //key not found error
     #[error("Key not found: {0}")]
-    KeyNotFound(String),
-
-    //wrong tyep error
-    #[error("Found wrong type: {0}")]
-    WrongType(String),
-
-    //logical error with a display message
-    #[error("Logical error: {0}")]
-    LogicError(String),
+    BencodeDecodableError(#[from] BencodeDecodableError),
 
     //io error with a display message
     #[error("IO error: {0}")]
