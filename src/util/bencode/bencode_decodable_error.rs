@@ -7,8 +7,7 @@ pub enum BencodeDecodableError {
     #[error("Key not found: {0}")]
     KeyNotFound(String),
 
-    //wrong tyep error
-    #[error("Found wrong type: {0}")]
+    //wrong type error
     WrongType(String),
 
     #[error("Error: {0}")]
