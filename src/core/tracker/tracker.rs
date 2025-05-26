@@ -1,14 +1,20 @@
 use crate::core::peer::peer::Peer;
+use crate::core::tracker::tracker_error::TrackerError;
+use crate::util::bencode::bencode_decodable::BencodeDecodable;
+use crate::util::bencode::bencode_decodable_error::BencodeDecodableError;
+use crate::util::errors::BStreamingError;
 
-use http::uri::{InvalidUri, InvalidUriParts, PathAndQuery};
+use bencode::{Bencode, from_buffer};
+use http::uri::PathAndQuery;
 use http::{Request, Uri};
 use http_body_util::{BodyExt, Empty};
 use hyper::body::Bytes;
 use hyper::client::conn::http1::handshake;
 use hyper_util::rt::TokioIo;
-use std::str::Utf8Error;
+use itoa;
+use std::array::TryFromSliceError;
+use std::rc::Rc;
 use std::time::Instant;
-use thiserror::Error;
 use tokio::net::TcpStream;
 
 //represents a request to be sent to a BitTorrent tracker
@@ -77,6 +83,9 @@ impl<'a> TrackerRequest<'a> {
 
     //build a complete tracker request URL with all required parameters
     pub fn build_url(&'a self) -> Result<Uri, TrackerError> {
+        //buffer for int to str
+        let mut buffer = itoa::Buffer::new();
+
         let mut uri_parts = Uri::from_maybe_shared(self.tracker.to_vec())?.into_parts();
 
         let path = uri_parts
@@ -86,34 +95,40 @@ impl<'a> TrackerRequest<'a> {
             .unwrap_or("/");
 
         //construct query string with all tracker parameters
-        let approx_query_capacity = (10 + 20 * 3) * 2 + 30;
-        let mut query_string = String::with_capacity(approx_query_capacity);
+        let approx_query_capacity = path.len() + 100 + (20 * 3) * 2;
+        let mut path_and_query = String::with_capacity(approx_query_capacity);
 
-        query_string.push_str("?info_hash=");
-        query_string.push_str(&self.url_info_hash);
-
-        query_string.push_str("&peer_id=");
-        query_string.push_str(&self.url_peer_id);
-
-        query_string.push_str("&port=");
-        query_string.push_str(&self.port.to_string());
-
-        query_string.push_str("&uploaded=");
-        query_string.push_str(&self.uploaded.to_string());
-
-        query_string.push_str("&downloaded=");
-        query_string.push_str(&self.downloaded.to_string());
-
-        query_string.push_str("&left=");
-        query_string.push_str(&self.left.to_string());
-
-        query_string.push_str("&compact=");
-        query_string.push_str(if self.compact { "1" } else { "0" });
-
-        //combine path with query string
-        let mut path_and_query = String::with_capacity(path.len() + query_string.len());
+        //start with base path
         path_and_query.push_str(path);
-        path_and_query.push_str(&query_string);
+
+        //add query delimiter
+        if path.contains('?') {
+            path_and_query.push('&');
+        } else {
+            path_and_query.push('?');
+        }
+
+        //build query parameters without intermediate allocations
+        path_and_query.push_str("info_hash=");
+        path_and_query.push_str(&self.url_info_hash);
+
+        path_and_query.push_str("&peer_id=");
+        path_and_query.push_str(&self.url_peer_id);
+
+        path_and_query.push_str("&port=");
+        path_and_query.push_str(buffer.format(self.port));
+
+        path_and_query.push_str("&uploaded=");
+        path_and_query.push_str(buffer.format(self.uploaded));
+
+        path_and_query.push_str("&downloaded=");
+        path_and_query.push_str(buffer.format(self.downloaded));
+
+        path_and_query.push_str("&left=");
+        path_and_query.push_str(buffer.format(self.left));
+
+        path_and_query.push_str("&compact=");
+        path_and_query.push(if self.compact { '1' } else { '0' });
 
         uri_parts.path_and_query = Some(PathAndQuery::try_from(path_and_query)?);
 
@@ -121,63 +136,82 @@ impl<'a> TrackerRequest<'a> {
     }
 }
 
+//represents a reponse sent by a trakcer
+#[derive(Debug)]
+struct TrackerResponse {
+    interval: u64,    //seconds between tracker requests
+    peers: Vec<Peer>, //list of peers received from tracker
+}
+
+impl<'a> BencodeDecodable<'a> for TrackerResponse {
+    fn decode(b: &'a Bencode) -> Result<Self, BencodeDecodableError> {
+        //get dict from bencode
+        let dict = Self::get_struct(b)?;
+
+        //get interval value
+        let interval = Self::get_u64(Self::get_struct_value("interval", dict)?)?;
+
+        //get peers
+        let peers_bytes = Self::get_str(Self::get_struct_value("peers", dict)?)?;
+        if peers_bytes.len() % 6 != 0 {
+            return Err(BencodeDecodableError::Other(
+                format!(
+                    "Peer data length {} is not a multiple of 6.",
+                    peers_bytes.len()
+                )
+                .into(),
+            ));
+        }
+
+        let peers = peers_bytes
+            .chunks_exact(6)
+            .map(|chunk| {
+                let peer_bytes: [u8; 6] = chunk
+                    .try_into()
+                    .map_err(|e: TryFromSliceError| BencodeDecodableError::Other(e.into()))?;
+                Peer::decode(&peer_bytes).map_err(|e| BencodeDecodableError::Other(e.into()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self { interval, peers })
+    }
+}
+
 //manages communication with a BitTorrent tracker
 #[derive(Debug)]
-pub struct Tracker<'a> {
-    interval: u64,         //seconds between tracker requests
-    last_request: Instant, //time of last tracker request
-    peers: Vec<Peer<'a>>,  //list of peers received from tracker
+pub struct Tracker {
+    last_request: Instant,         //time of last tracker request
+    response_bencode: Rc<Bencode>, //response bencode format
+    response: TrackerResponse,     //response by tracker
 }
 
-//possible errors that can occur during tracker operations
-#[derive(Error, Debug)]
-pub enum TrackerError {
-    #[error("Invalid Uri: {0}")]
-    InvalidUri(#[from] InvalidUri),
-
-    #[error("Stream Error: {0}")]
-    StreamError(#[from] std::io::Error),
-
-    #[error("Hyper Error: {0}")]
-    HyperError(#[from] hyper::Error),
-
-    #[error("Hyper http Error: {0}")]
-    HttpError(#[from] hyper::http::Error),
-
-    #[error("UTF8 Error: {0}")]
-    UTF8Error(#[from] Utf8Error),
-
-    #[error("Invalid URI Parts: {0}")]
-    InvalidURIParts(#[from] InvalidUriParts),
-
-    #[error("Error: {0}")]
-    Other(String),
-}
-
-impl<'a> Tracker<'a> {
+impl<'a> Tracker {
     //create a new tracker and sends an initial request
-    pub async fn new(req: &'a TrackerRequest<'a>) -> Result<Self, TrackerError> {
-        let mut tracker = Self {
-            interval: 0,
-            last_request: Instant::now(),
-            peers: Vec::new(),
+    pub async fn new(req: &TrackerRequest<'_>) -> Result<Self, TrackerError> {
+        let response_bencode = Self::send_request(req).await?;
+
+        //extract the bencode and create a 'static reference
+        //this is safe because we ensure the data lives as long as Tracker
+        let bencode_static = unsafe {
+            let bencode_ref = response_bencode.as_ref();
+            std::mem::transmute::<&Bencode, &'a Bencode>(bencode_ref)
         };
 
-        tracker.send_request(req).await?;
-
-        Ok(tracker)
+        Ok(Self {
+            last_request: Instant::now(),
+            response_bencode,
+            response: TrackerResponse::decode(&bencode_static)?,
+        })
     }
 
     //send a request to the tracker and processes the response
-    async fn send_request(&mut self, req: &'a TrackerRequest<'a>) -> Result<(), TrackerError> {
-        self.last_request = Instant::now();
-
+    async fn send_request(req: &TrackerRequest<'_>) -> Result<Rc<Bencode>, TrackerError> {
         let url = req.build_url()?;
 
         //set up connection to tracker
         let host = url
             .host()
-            .ok_or(TrackerError::Other("Invalid host".into()))?;
+            .ok_or(TrackerError::Other("Missing host in tracker URL".into()))?;
         let port = url.port_u16().unwrap_or(6969);
 
         let stream = TcpStream::connect((host, port)).await?;
@@ -204,21 +238,23 @@ impl<'a> Tracker<'a> {
 
         let body_bytes: &[u8] = &res.collect().await?.to_bytes();
 
-        //process response data
-        println!("{:?}", body_bytes);
+        //create a place to store the bencode
+        let bencode_holder = Rc::new(from_buffer(body_bytes).map_err(BStreamingError::from)?);
 
-        Ok(())
+        Ok(bencode_holder)
     }
 
     //get peers from tracker, making a new request if needed
     pub async fn get_peers(
         &'a mut self,
         req: &'a TrackerRequest<'a>,
-    ) -> Result<&'a Vec<Peer<'a>>, TrackerError> {
+    ) -> Result<&'a Vec<Peer>, TrackerError> {
         //request again if interval has passed
-        if self.last_request.elapsed().as_secs() > self.interval {
-            self.send_request(req).await?;
+        if self.last_request.elapsed().as_secs() > self.response.interval {
+            self.response_bencode = Self::send_request(req).await?;
+            self.response = TrackerResponse::decode(self.response_bencode.as_ref())?;
+            self.last_request = Instant::now();
         }
-        Ok(&self.peers)
+        Ok(&self.response.peers)
     }
 }
