@@ -1,6 +1,7 @@
-use crate::core::torrent::torrent_error::{BStreamingError, ReadTorrentError};
+use crate::core::torrent::torrent_error::ReadTorrentError;
 use crate::util::bencode::bencode_decodable::BencodeDecodable;
 use crate::util::bencode::bencode_decodable_error::BencodeDecodableError;
+use crate::util::errors::BStreamingError;
 
 use bencode::util::ByteString;
 use bencode::{Bencode, from_buffer};
